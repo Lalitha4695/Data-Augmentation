@@ -1,0 +1,180 @@
+import os
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+import time
+from keras import Model
+from tensorflow import keras
+from keras.layers import Input, Dense, Lambda, LSTM, RepeatVector
+import globals
+from numpy import mean
+from pandas import read_excel
+from pandas import read_csv
+from sklearn.model_selection import cross_val_score, KFold
+
+import augmentation_GAN
+
+merged_df = pd.concat([x_train, y_train],axis=1)
+
+
+# Defining the length of y_Train
+y_len = len(y_train.axes[1])
+
+def lstm_vae(merged_df):
+    # Create a dummy dataset of numerical data
+    data = merged_df
+
+    # Define the VAE model
+    input_dim = data.shape[1]
+    latent_dim = 2
+
+    input_layer = keras.layers.Input(shape=(input_dim,))
+    hidden_layer_1 = keras.layers.Dense(64, activation='relu')(input_layer)
+    hidden_layer_2 = keras.layers.Dense(32, activation='relu')(hidden_layer_1)
+    z_mean = keras.layers.Dense(latent_dim)(hidden_layer_2)
+    z_log_var = keras.layers.Dense(latent_dim)(hidden_layer_2)
+
+    def sampling(args):
+        z_mean, z_log_var = args
+        epsilon = keras.backend.random_normal(shape=(keras.backend.shape(z_mean)[0], latent_dim))
+        return z_mean + keras.backend.exp(0.5 * z_log_var) * epsilon
+
+    latent_layer = keras.layers.Lambda(sampling)([z_mean, z_log_var])
+    hidden_layer_3 = keras.layers.Dense(32, activation='relu')(latent_layer)
+    hidden_layer_4 = keras.layers.Dense(64, activation='relu')(hidden_layer_3)
+    output_layer = keras.layers.Dense(input_dim)(hidden_layer_4)
+
+    encoder = keras.models.Model(input_layer, [z_mean, z_log_var, latent_layer])
+    vae = keras.models.Model(input_layer, output_layer)
+
+    # Define the loss function and compile the model
+    reconstruction_loss = keras.losses.mean_squared_error(input_layer, output_layer)
+    kl_loss = -0.5 * keras.backend.mean(1 + z_log_var - keras.backend.square(z_mean) - keras.backend.exp(z_log_var),
+                                        axis=-1)
+    vae_loss = reconstruction_loss + kl_loss
+    vae.add_loss(vae_loss)
+    vae.compile(optimizer='adam')
+
+    # Train the VAE model
+    vae.fit(data, epochs=100, batch_size=32)
+
+    # Generate synthetic data using the VAE model
+    synthetic_data = vae.predict(data)
+    synthetic_data[synthetic_data < 0] = 0
+
+    # VAE augmented data
+    df_vae = pd.DataFrame(synthetic_data, columns= merged_df.columns)
+
+    # Define the dimensions of the latent space
+    latent_dim = 2
+
+    X = df_vae
+
+    # Define input shape
+    input_shape = X.shape[1:]
+
+    # Convert the input data to time series
+    X = X.values.reshape(-1, 1, input_shape[0])
+
+    # Define the LSTM model
+    inputs = Input(shape=(1, input_shape[0]))
+    x = LSTM(32, activation='relu')(inputs)
+    x = RepeatVector(1)(x)
+    outputs = LSTM(input_shape[0], activation='linear', return_sequences=True)(x)
+
+    lstm = Model(inputs, outputs)
+
+    # Compile the model
+    lstm.compile(optimizer='adam', loss='mse')
+
+    # Train the model
+    lstm.fit(X, X, epochs=100, batch_size=32)
+
+    # Generate synthetic data
+    synthetic_data = lstm.predict(X)
+
+    # Reshape the synthetic data to the original shape
+    synthetic_data = synthetic_data.reshape(-1, input_shape[0])
+    synthetic_data[synthetic_data < 0] = 0
+
+    data_syn = pd.DataFrame(synthetic_data, columns=merged_df.columns)
+    return data_syn
+
+def merged_split(merged, y_len):
+    # Split the last 4 columns to y_train
+    syn_y = merged.iloc[:, -y_len:]
+    # Save the rest to x_train
+    syn_x = merged.iloc[:, :-y_len]
+    return syn_x, syn_y
+
+
+def dataaugmentation_vae(x_train, y_train, data_to_generate, method='add'):
+    start_time = time.time()
+    # Global variable
+    global augmented_x
+    global augmented_y
+
+    if method == 'replace':
+        perc_replaced = float(data_to_generate)
+        # Extracting data after preparing the dataset
+        x_train_reduced, y_train_reduced, rows_to_generate = augmentation_GAN.prepareDAExperiment(x_train, y_train,
+                                                                                                  perc_replaced)
+        # merging x_train and y_train
+        merged_train = pd.concat([x_train_reduced, y_train_reduced], axis=1)
+        # Generating synthetic data using warping
+        synthetic_df = lstm_vae(merged_train)
+        # Calculating the number of rows generated
+        rows_generated = len(synthetic_df.axes[0])
+        # Assigning reduced merged to train
+        train = merged_train
+
+    if method == 'add':
+        rows_to_generate = int(data_to_generate)
+        # Generating synthetic data using warping
+        synthetic_df = lstm_vae(merged_df)
+        # Calculating the number of rows generated
+        rows_generated = len(synthetic_df.axes[0])
+        # Assigning reduced merged to train
+        train = merged_df
+
+    # Creating empty x_train and y_train dataframes
+    df_train = pd.DataFrame([])
+
+    if rows_to_generate < rows_generated:
+        # Extracting calculated rows from generated data from top
+        generated_train = synthetic_df.head(rows_to_generate)
+        # Appending the extracted data and reduced data
+        augmented_train = generated_train.append(train, ignore_index=True)
+        augmented_x, augmented_y = merged_split(augmented_train,y_len)
+        # Saving y_train and x_train to a csv file
+        augmented_x.to_csv(
+            fr'C:\Users\user\Nextcloud\Data Augmentation\Data\GAN Sample Output\Data\{str(data_to_generate)}_Final_x_train_vae.csv')
+        augmented_y.to_csv(
+            fr'C:\Users\user\Nextcloud\Data Augmentation\Data\GAN Sample Output\Data\{str(data_to_generate)}_Final_y_train_vae.csv')
+    else:
+        while rows_to_generate > rows_generated:
+            # Random shuffling the dataset
+            shuffle_merged = merged_df.sample(frac=1)
+            # Generating synthetic data using warping
+            synthetic_df = lstm_vae(shuffle_merged)
+            # save the generated data to a dataframe
+            df_train = df_train.append(synthetic_df, ignore_index=True)
+            # Calculating the number of rows generated
+            rows_generated = len(df_train.axes[0])
+            # Extracting calculated rows from generated data from top
+            generated_train = df_train.head(rows_to_generate)
+            # Appending the extracted data and reduced data
+            augmented_train = generated_train.append(train, ignore_index=True)
+            augmented_x, augmented_y = merged_split(augmented_train, y_len)
+            # Saving y_train and x_train to a csv file
+            augmented_x.to_csv(fr'C:\Users\user\Nextcloud\Data Augmentation\Data\GAN Sample Output\Data\{str(data_to_generate)}_Final_x_train_vae.csv')
+            augmented_y.to_csv(fr'C:\Users\user\Nextcloud\Data Augmentation\Data\GAN Sample Output\Data\{str(data_to_generate)}_Final_y_train_vae.csv')
+    end_time = time.time()
+    rows_synthetic = rows_to_generate
+    rows_real = len(x_train.axes[0])
+    print("Time taken for data augmentation: ", end_time - start_time, "seconds")
+    return augmented_x, augmented_y, rows_synthetic, rows_real
+
+#dataaugmentation_vae(x_train, y_train, input("Enter data "), 'replace')
+
+
