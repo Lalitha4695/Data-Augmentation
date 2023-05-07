@@ -1,0 +1,28 @@
+# This script can execute various data augmentation techniques
+
+import augmentation_GAN
+import augmentation_warping
+import pattern_mixing
+import os
+import globals
+
+
+def dataaugmentation_techniques(x_train, y_train, rows_to_generate, technique, method):
+    # Executes the specified data augmenation technique, using either the 'add' or 'replace' method
+    # method)
+    #   'add' - the specified number of rows synthetic data are generated and appended to the original data set
+    #   'replace' - the specified percentage (as a decimal) of the original dataset is replaced with synthetic data
+    # rows_to_generate)
+    #   when method='add', this is the number of additional synthetic rows which will be generated.
+    #   when method='replace', this is the decimal percentage of the orginial data set to be replaced with synthetic data.
+    if technique == 'GAN':
+        new_x, new_y, rows_synthetic, rows_real = augmentation_GAN.dataaugmentation_GAN(x_train, y_train, rows_to_generate, method=method)
+    if technique == 'warping':
+        new_x, new_y, rows_synthetic, rows_real = augmentation_warping.dataaugmentation_warping(x_train, y_train,
+                                                                                        rows_to_generate, method=method)
+    if technique == 'pattern mixing':
+        new_x, new_y, rows_synthetic, rows_real = pattern_mixing.dataaugmentation_vae(x_train, y_train,
+                                                                                        rows_to_generate, method=method)
+    # insert calls to the other DA techniques here, once they are ready
+    print(technique, "data augmentation complete")
+    return new_x, new_y, rows_synthetic, rows_real
