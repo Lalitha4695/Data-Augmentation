@@ -1,0 +1,107 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Dec  2 13:55:52 2022
+
+import os
+import sys
+from pandas import read_csv
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+import neuralNetwork
+import augmentedTechniques
+import globals
+import warnings
+warnings.filterwarnings("ignore")
+
+# Name for the overall analysis (will be used to properly save the plots)
+analysis_name = "DA - All Features"
+
+# Load dataset
+# Enter your dataset location
+
+def scores_df():
+    # Creates empty dataframe for storing the scores later
+    df = pd.DataFrame([],
+                      columns=['Technique', 'Method', 'Synthetic Samples', 'Real Samples', 'Total Samples', 'Algorithm',
+                               'Coeff. of Determination', 'Root Mean Square Error', 'Mean Absolute Error'])
+    return df
+
+# Creates empty dataframe for storing the scores later
+df = scores_df()
+
+# We first do a normalization including the labels, since this is needed to compare the beta coefficients of the multivariate linear regression, and the NN requires normalized labels
+##########################################################################
+# Calculate basic statistics with the train data and normalize
+train_stats = train_dataset.describe()
+train_stats = train_stats.transpose()
+normed_train_data = ekoAusting.norm(train_dataset,train_stats)
+normed_test_data = ekoAusting.norm(test_dataset,train_stats)
+
+# Seperate out response variable
+train_labels = train_dataset[outputs]
+test_labels = test_dataset[outputs]
+x_train=normed_train_data.drop(columns= [""]) #drop y columns 
+x_test=normed_test_data.drop(columns=[""]) #drop y columns
+y_train=normed_train_data.loc[:,[""]] # drop y columns
+y_test=normed_test_data.loc[:,[""]] # drop y columns
+
+def collect_results():
+    # This function prepares the augmented data and passes it to the functions the calculate and generate the model performances
+
+    global df
+
+    # rename "augmented training" data to "train"
+    x_train = augmented_x
+    y_train = augmented_y
+
+    # Combine test and train sets for doing cross validation later
+    #X = pd.concat([x_train,x_test])
+    #Y = pd.concat([y_train,y_test])
+
+    # Create and score all the models
+    df = model_and_score(x_train,y_train,x_test,y_test,df,analysis_name)
+
+
+    # Create NN model and calculate score, NOT using a cross validation
+    NN_score, learning_curve_score = neuralNetwork.neural_network(dataset_features, x_train, x_test, y_train, y_test) # Train neural network model
+
+    # Create NN model and calculate score, also using a cross validation
+    #cv = 4
+    #NN_score, acc_score = neuralNetwork.cross_val_NN(cv,dataset_features,x_train,x_test,y_train,y_test) # Train and cross validate neural network model
+    df = df.append(NN_score, ignore_index=True)
+
+    # Create NN learning curve data
+    # NN_learning_curve_all_scores = neuralNetwork.NN_learning_curve(cv, dataset_features, x_train, x_test, y_train, y_test, df)
+
+    #save_dataframe(df,analysis_name,globals.technique+globals.method)
+    #save_dataframe(NN_learning_curve_all_scores,analysis_name,"NN learning curve")
+
+    # Plot comparison of the scores
+    # plot_scores(df,analysis_name)
+    # plot_all_learning_curves(X, Y, NN_learning_curve_all_scores, analysis_name)
+
+globals.initialize() # global values need to be initialized once
+
+
+# # Iterate through the GAN 'add'
+#for i in range(200, 3001, 200):
+# globals.technique = 'pattern mixing'
+# globals.method = 'add'
+# augmented_x, augmented_y, globals.rows_synthetic, globals.rows_real = augmentedTechniques.dataaugmentation_techniques(x_train, y_train, i, technique=globals.technique,method=globals.method)
+# collect_results()
+
+
+
+
+# # Iterate through the GAN 'replace' experiment
+globals.technique = 'pattern mixing'
+globals.method = 'replace'
+for i in np.arange(0, 1, 0.1):
+    augmented_x, augmented_y, globals.rows_synthetic, globals.rows_real = augmentedTechniques.dataaugmentation_techniques(x_train, y_train, i, technique=globals.technique, method=globals.method)
+    collect_results()
+
+
+
+
+
