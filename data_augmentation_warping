@@ -1,0 +1,127 @@
+# This script contains all functions needed to perform data augmentation on a dataframe, using warping
+
+import pandas as pd
+import numpy as np
+import tabgan
+import augmentation_GAN
+import pandas as pd
+import numpy as np
+import globals
+from keras import metrics, Input, Model
+import keras
+from keras.layers import Lambda, Input, Dense, Lambda, BatchNormalization
+from keras.models import Model, Sequential
+from keras.losses import mse, binary_crossentropy
+from keras import backend as K
+import time
+from keras.layers import Dense
+from numpy import mean
+from pandas import read_excel
+from pandas import read_csv
+from sklearn.model_selection import cross_val_score, KFold
+import os
+
+# The input is already normalized
+
+merged_df = pd.concat([x_train, y_train],axis=1)
+
+# Defining the length of y_Train
+y_len = len(y_train.axes[1])
+
+
+def warping(merged_df):
+    # Define the warping function
+    def sigmoid(x, a, b):
+        return 1 / (1 + np.exp(-a * (x - b)))
+    # Choose the warping parameters based on the mean and covariance of the training data
+    a_mean = np.mean(merged_df)
+    b_mean = 0
+    a_cov = np.cov(merged_df.T)[0, 0]
+    b_cov = 0
+
+    # Generate synthetic data by applying the warping function to the original data with the chosen parameters
+    syn_data = sigmoid(merged_df, a_mean, b_mean) * np.sqrt(a_cov) + b_cov
+    synthetic_df = pd.DataFrame(data=syn_data, columns=merged_df.columns)
+    return synthetic_df
+
+# Dont merge
+
+def merge_split(merged, y_len):
+    # Split the last 4 columns to y_train
+    syn_y = merged.iloc[:, -y_len:]
+    # Save the rest to x_train
+    syn_x = merged.iloc[:, :-y_len]
+    return syn_x, syn_y
+
+
+def dataaugmentation_warping(x_train, y_train, data_to_generate, method='add'):
+    start_time = time.time()
+    # Global variable
+    global augmented_x
+    global augmented_y
+
+    if method == 'replace':
+        perc_replaced = float(data_to_generate)
+        # Extracting data after preparing the dataset
+        x_train_reduced, y_train_reduced, rows_to_generate = augmentation_GAN.prepareDAExperiment(x_train, y_train,
+                                                                                                  perc_replaced)
+        # merging x_train and y_train
+        merged_train = pd.concat([x_train_reduced, y_train_reduced], axis=1)
+        # Generating synthetic data using warping
+        synthetic_df = warping(merged_train)
+        # Calculating the number of rows generated
+        rows_generated = len(synthetic_df.axes[0])
+        # Assigning reduced merged to train
+        train = merged_train
+
+    if method == 'add':
+        rows_to_generate = int(data_to_generate)
+        # Generating synthetic data using warping
+        synthetic_df = warping(merged_df)
+        # Calculating the number of rows generated
+        rows_generated = len(synthetic_df.axes[0])
+        # Assigning reduced merged to train
+        train = merged_df
+
+    # Creating empty x_train and y_train dataframes
+    df_train = pd.DataFrame([])
+    # Creating a variable to save the augmented dataset to a csv file.
+    save_x_csv = fr'Data Output\Generated Datasets\Warping\{str(method)}_{str(data_to_generate)}_Final_x_Warping.csv'
+    save_y_csv = fr'Data Output\Generated Datasets\Warping\{str(method)}_{str(data_to_generate)}_Final_y_Warping.csv'
+
+    if rows_to_generate < rows_generated:
+        # Extracting calculated rows from generated data from top
+        generated_train = synthetic_df.head(rows_to_generate)
+        # Appending the extracted data and reduced data
+        augmented_train = generated_train.append(train, ignore_index=True)
+        augmented_x, augmented_y = merge_split(augmented_train, y_len)
+        # Saving y_train and x_train to a csv file
+        augmented_x.to_csv(
+            os.path.join(globals.directory,save_x_csv))
+        augmented_y.to_csv(
+            os.path.join(globals.directory, save_y_csv))
+    else:
+        while rows_to_generate > rows_generated:
+            # Random shuffling the dataset
+            shuffle_merged = merged_df.sample(frac=1)
+            # Generating synthetic data using warping
+            synthetic_df = warping(shuffle_merged)
+            # save the generated data to a dataframe
+            df_train = df_train.append(synthetic_df, ignore_index=True)
+            # Calculating the number of rows generated
+            rows_generated = len(df_train.axes[0])
+            # Extracting calculated rows from generated data from top
+            generated_train = df_train.head(rows_to_generate)
+            # Appending the extracted data and reduced data
+            augmented_train = generated_train.append(train, ignore_index=True)
+            augmented_x, augmented_y = merge_split(augmented_train, y_len)
+            # Saving y_train and x_train to a csv file
+            augmented_x.to_csv(os.path.join(globals.directory,save_x_csv))
+            augmented_y.to_csv(os.path.join(globals.directory,save_y_csv))
+    end_time = time.time()
+    rows_synthetic = rows_to_generate
+    rows_real = len(x_train.axes[0])
+    print("Time taken for data augmentation: ", end_time - start_time, "seconds")
+    return augmented_x, augmented_y, rows_synthetic, rows_real
+
+
