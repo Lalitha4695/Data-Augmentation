@@ -1,0 +1,133 @@
+# This script contains all functions needed to perform data augmentation on a dataframe, using GAN
+import os
+import statistics
+import time
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+import globals
+from tabgan.sampler import GANGenerator
+
+
+# sys.path.append(r"C:\Users\user\Nextcloud\Data Augmentation\Code\augmentGAN")
+
+# Preparing the dataset for replacing data
+def prepareDAExperiment(x_train, y_train, perc_replaced):
+    # Remove certain percentage of rows from x_train and y_train
+    rows_to_generate = int(round((perc_replaced * len(x_train.axes[0]))))
+    # Removing certain percentage of rows from top
+    x_train_deleted = x_train.head(rows_to_generate)
+    y_train_deleted = y_train.head(rows_to_generate)
+    x_train_reduced = x_train.iloc[rows_to_generate:]
+    y_train_reduced = y_train.iloc[rows_to_generate:]
+    return x_train_reduced, y_train_reduced, rows_to_generate
+
+
+# Extracting generated rows and appending to the reduced dataset
+def generateData(rows_generated, synthetic_x_train, synthetic_y_train, x_train_reduced, y_train_reduced):
+    # Extracting calculated rows from generated data from top
+    generated_x_train = synthetic_x_train.head(rows_generated)
+    generated_y_train = synthetic_y_train.head(rows_generated)
+    # Appending the extracted data and reduced data
+    augmented_x_train = generated_x_train.append(x_train_reduced, ignore_index=True)
+    augmented_y_train = generated_y_train.append(y_train_reduced, ignore_index=True)
+    return augmented_x_train, augmented_y_train
+
+
+# Create training data split
+def dataSplit(x_train_split, y_train_split):
+    reduced_x_train_dataset, reduced_x_test_dataset, reduced_y_train_dataset, reduced_y_test_dataset = (
+        train_test_split(x_train_split, y_train_split, train_size=0.8, random_state=None, shuffle=True))
+    return reduced_x_train_dataset, reduced_y_train_dataset, reduced_x_test_dataset
+
+
+# Generating data using GAN
+# Epochs - No. of epochs should be set as high as possible for minimising error rates
+# Batch Size - Batch size should be >= 1 and less than the no. of training samples
+def syntheticData_GAN(x_train, y_train, test):
+    new_x_train, new_y_train = GANGenerator(gen_x_times=1.1, cat_cols=None,
+                                            bot_filter_quantile=0.001, top_filter_quantile=0.999,
+                                            is_post_process=True,
+                                            adversarial_model_params={
+                                                "metrics": "AUC", "max_depth": 2, "max_bin": 100,
+                                                "learning_rate": 0.02, "random_state": None, "n_estimators": 500,
+                                            }, pregeneration_frac=2, only_generated_data=False,
+                                            gan_params={"batch_size": 500, "patience": 25,
+                                                        "epochs": 2000, }).generate_data_pipe(x_train, y_train,
+                                                                                              test, deep_copy=True,
+                                                                                              only_adversarial=False,
+                                                                                              use_adversarial=True)
+    # Assigning train index value to y_train
+    new_y_train.index = new_x_train.index
+    # Creating Dataframe for train and y_train
+    new_df_x_train = pd.DataFrame(data=new_x_train)
+    new_df_y_train = pd.DataFrame(data=new_y_train)
+
+    return new_df_x_train, new_df_y_train
+
+
+def dataaugmentation_GAN(x_train, y_train, data_to_generate, method='add'):
+    start_time = time.time()
+    if method == 'replace':
+        perc_replaced = float(data_to_generate)
+        # Extracting data after preparing the dataset
+        x_train_reduced, y_train_reduced, rows_to_generate = prepareDAExperiment(x_train, y_train, perc_replaced)
+        data = rows_to_generate
+        # New x_train, y_train and x_test datasets after data split
+        new_x_train, new_y_train, new_x_test = dataSplit(x_train_reduced, y_train_reduced)
+        # Generating synthetic data using GAN generator
+        gan_x_train, gan_y_train = syntheticData_GAN(new_x_train, new_y_train, new_x_test)
+        # Calculating number of rows generated
+        rows_generated = len(gan_x_train.axes[0])
+        # Renaming reduced x_train and y_train to x_train and y_train
+        x_train = x_train_reduced
+        y_train = y_train_reduced
+
+    if method == 'add':
+        rows_to_generate = int(data_to_generate)
+        # Create new training data split
+        new_x_train, new_y_train, new_x_test = dataSplit(x_train, y_train)
+
+        # Generating synthetic data using GAN generator
+        gan_x_train, gan_y_train = syntheticData_GAN(new_x_train, new_y_train, new_x_test)
+        # Checking the length of the generated data
+        rows_generated = len(gan_x_train.axes[0])
+
+    # Creating empty x_train and y_train dataframes
+    df_x_train = pd.DataFrame([])
+    df_y_train = pd.DataFrame([])
+
+    # Creating a variable to save the augmented dataset to a csv file.
+    save_x_csv = fr'Data Output\Generated Datasets\GAN\{str(method)}_{str(data_to_generate)}_Final_x_GAN.csv'
+    save_y_csv = fr'Data Output\Generated Datasets\GAN\{str(method)}_{str(data_to_generate)}_Final_y_GAN.csv'
+    save_parameters = fr'Data Output\Generated Datasets\GAN\{str(method)}_{str(data_to_generate)}_Statistical_Parameters.csv'
+
+    if rows_to_generate < rows_generated:
+        # Calculate number of rows from percentage
+        augmented_x_train, augmented_y_train = generateData(rows_to_generate, gan_x_train, gan_y_train,
+                                                            x_train, y_train)
+        # Saving y_train and x_train to a csv file
+        augmented_x_train.to_csv(os.path.join(globals.directory, save_x_csv))
+        augmented_y_train.to_csv(os.path.join(globals.directory, save_y_csv))
+    else:
+        while rows_to_generate > rows_generated:
+            # train test split for each iteration, outputs different train and test splits when random state is none
+            x_train_split, y_train_split, test_split = dataSplit(x_train, y_train)
+            # Generate new x_train and y_train data
+            x_append, y_append = syntheticData_GAN(x_train_split, y_train_split, test_split)
+            # save the generated data to a dataframe
+            df_x_train = df_x_train.append(x_append, ignore_index=True)
+            df_y_train = df_y_train.append(y_append, ignore_index=True)
+            # Calculating the length of the generated rows and updating rows_generated
+            rows_generated = len(df_x_train.axes[0])
+            # Calculating the number of rows from percentage
+            augmented_x_train, augmented_y_train = generateData(rows_to_generate, df_x_train, df_y_train, x_train,
+                                                                y_train)
+            augmented_x_train.to_csv(os.path.join(globals.directory, save_x_csv))
+            augmented_y_train.to_csv(os.path.join(globals.directory, save_y_csv))
+    end_time = time.time()
+    rows_synthetic = rows_to_generate
+    rows_real = len(x_train.axes[0])
+    print("Time taken for data augmentation: ", end_time - start_time, "seconds")
+    return augmented_x_train, augmented_y_train, rows_synthetic, rows_real
+
